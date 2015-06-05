@@ -264,7 +264,11 @@ i=1
 for(m in mvals){
   nauxtime <- microbenchmark(cmodAux$run(m), times=10, unit="s")
   nauxlik <- mean(sapply(rep(m,10),function(x)cmodAux$run(x)))
-  lauxtime <- microbenchmark(init_bi$run(add_options=paste("--init-file initvars.nc  --filter lookahead  --nparticles ", m, sep="")), times=10, unit='s')
+  lauxtime <- microbenchmark(init_bi$run(add_options = 
+                                           paste("--init-file initvars.nc 
+                                                 --filter lookahead 
+                                                 --nparticles ", m, sep="")),
+                             times=10, unit='s')
   lauxlike <- mean(sapply(rep(m,10),function(x)biauxLike(x)))
   timelist <- rbind(timelist,cbind("Method" = c("NIMBLE Auxiliary", "LibBi Auxiliary"),
                                    "N. Particles" =c(m,m),"Mean Log Lik." = c(nauxlik, lauxlike),
@@ -281,11 +285,14 @@ auxtable
 m=50000
 
 cmodAux$run(m)
-init_bi$run(add_options=paste("--init-file initvars.nc  --filter lookahead  --nparticles ", m, sep=""))
+init_bi$run(add_options = paste("--init-file initvars.nc
+                                --filter lookahead  --nparticles ", m, sep=""))
 
-plotmat <- data.frame(value = c(as.matrix(cmodAux$mv, 'xs'), bi_read_var(init_bi$result$output_file_name, "x")[100,]),
+plotmat <- data.frame(value = c(as.matrix(cmodAux$mv, 'xs'),
+                                bi_read_var(init_bi$result$output_file_name, "x")[100,]),
                       package=c(rep("Nimble",m),rep("LibBi",m)),
-                      wtz= c(as.matrix(cmodAux$mv, 'wts'), exp(bi_read_var(init_bi$result$output_file_name, "logweight")[100,])))
+                      wtz= c(as.matrix(cmodAux$mv, 'wts'), 
+                             exp(bi_read_var(init_bi$result$output_file_name, "logweight")[100,])))
 
 auxplot <- ggplot(plotmat, aes(x=value))+
   geom_histogram(aes(y=..density.., weight=wtz),binwidth=0.01,
@@ -296,3 +303,63 @@ auxplot <- ggplot(plotmat, aes(x=value))+
 suppressWarnings(print(auxplot))
 ```
 
+##NIMBLE vs. Biips
+
+
+Below we provide a comparison of NIMBLE to Biips. NIMBLE is significantly faster than Biips for large numbers of particles.  We found that Biips took over a minute for each run of 50,000 particles, so we decided to only include a maximum of 10,000 particles in the table below.  
+
+```{r biipstable, echo=FALSE, results='hide', message=FALSE, cache=TRUE}
+library(Rbiips)
+
+biipsDat <- constants
+biipsDat$y <- data$y
+biipsDat$a <- inits$a
+biipsDat$b <- inits$b
+biipsDat$sigPN <- inits$sigPN
+biipsDat$sigOE <- inits$sigOE
+bmod <- biips_model("corrMod.BUGS", biipsDat, quiet=TRUE)
+bipLikeFunc  <- function(m){ biips_smc_samples(bmod, 'x[1:100]', m, type = "f",
+                                               rs_thres=1 )$log_marg_like}
+
+timelist <- data.frame()
+for(m in mvals){
+  nboottime <- microbenchmark(cmodBoot$run(m), times=10, unit="s")
+  nbootlik <- mean(sapply(rep(m,10),function(x)cmodBoot$run(x)))
+  bboottime <- microbenchmark(biips_smc_samples(bmod, 'x[1:100]', m, type = "f",
+                                                rs_thres=1 ),
+                              times=10, unit="s")
+  bbootlike <- mean(sapply(rep(m,10),function(x)bipLikeFunc(x)))
+  timelist <- rbind(timelist,cbind("Method" = c("NIMBLE Bootstrap"
+                                                , "Biips Bootstrap"),
+                                   "N. Particles" =c(m,m),
+                                   "Mean Log Lik." = c(nbootlik, bbootlike),
+                                   rbind(summary(nboottime), 
+                                         summary(bboottime))))
+}
+
+timelist <- timelist[,-c(4,6,7,9,11)]
+boottable <- xtable(timelist)
+m=50000
+
+cmodBoot$run(m)
+biipsOut <- biips_smc_samples(bmod, 'x[1:100]', m, type = "f", rs_thres=1 )
+
+plotmat <- data.frame(value = c(as.matrix(cmodBoot$mv, 'xs'),
+                                biipsOut$x$f$values[100,]),
+                      package=c(rep("Nimble",m),rep("Biips",m)),
+                      wtz= c(rep(1,m), biipsOut$f$weights[100,]))
+
+bootplot <- ggplot(plotmat, aes(x=value))+
+  geom_histogram(aes(y=..density.., weight=wtz),binwidth=0.01,
+                 colour = "darkgreen", fill = "white")+ 
+  facet_wrap(~package, nrow=2, as.table=F)+ 
+  ggtitle(expression(paste("Bootstrap Posteriors for ", x,sep="")))+
+  geom_line(data=pldat, aes(x=nums, y=dens))
+```
+
+
+```{r biipsout, echo=FALSE, results='asis', message=FALSE, cache=TRUE}
+boottable
+
+suppressWarnings(print(bootplot))
+```
