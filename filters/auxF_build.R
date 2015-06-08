@@ -14,6 +14,9 @@ auxStepVirtual <- nimbleFunctionVirtual(
 )
 
 
+# Bootstrap filter as specified in Doucet & Johnasen '08,
+# uses weights from previous time point to calculate likelihood estimate.
+
 bootFStepNS <- nimbleFunction(
   contains = auxStepVirtual,
   setup = function(model, mv, nodes, iNode, silent = FALSE) {
@@ -23,36 +26,49 @@ bootFStepNS <- nimbleFunction(
     prevDeterm <- model$getDependencies(prevNode, determOnly = TRUE)
     thisDeterm <- model$getDependencies(thisNode, determOnly = TRUE)
     thisData   <- model$getDependencies(thisNode, dataOnly = TRUE)
+    isLast <- (iNode == length(nodes))
   },
   run = function(m = integer(), thresh_num=double()) {
     returnType(double())
     declare(wts, double(1, m))
     declare(ids, integer(1, m))
+    declare(ess, double())
+    declare(llEst, double(1,m))
     for(i in 1:m) {
       if(notFirst) {  
         copy(mv, model, nodes = 'xs', nodesTo = prevNode, row = i)
-        calculate(model, prevDeterm) }
+        calculate(model, prevDeterm) 
+      }
       simulate(model, thisNode)
       copy(model, mv, nodes = thisNode, nodesTo = 'x', row = i)
       calculate(model, thisDeterm)
       wts[i]  <- exp(calculate(model, thisData))
+      if(notFirst){
+        llEst[i] <- wts[i]*mv['wts',i][1]
+      }
+      else{
+        llEst[i] <- wts[i]/m
+      }
     }
-    
     # Normalize weights and calculate effective sample size 
-    ess <- 1/sum((wts/sum(wts))^2) 
+    wts <- wts/sum(wts)
+    ess <- 1/sum(wts^2) 
     
     # Determine whether to resample by weights or not
     if(ess < thresh_num){
       rankSample(wts, m, ids, silent)
-      for(i in 1:m)
+      for(i in 1:m){
         copy(mv, mv, nodes = 'x', nodesTo = 'xs', row = ids[i], rowTo = i)
+        mv['wts',i][1] <<- 1/m
+      }
     }
     else{
       for(i in 1:m){
         copy(mv, mv, "x", "xs", i, i)
+        mv['wts',i][1] <<- wts[i]
       }
     }
-    return(log(mean(wts)))
+    return(log(sum(llEst)))
   },  where = getLoadingNamespace()
 )
 
@@ -68,50 +84,62 @@ bootFStepS <- nimbleFunction(
     thisData   <- model$getDependencies(thisNode, dataOnly = TRUE)
     t <- iNode  # current time point
     # Get names of xs node for current and previous time point (used in copy)
-    thisName <- paste("xs[,", t, "]", sep = "") 
-    prevName <- paste("xs[,", t-1, "]", sep = "")
+    thisXSName <- paste("xs[,", t, "]", sep = "") 
+    prevXSName <- paste("xs[,", t-1, "]", sep = "")
+    thisXName <- paste("x[,", t, "]", sep = "")
+    isLast <- (iNode == length(nodes))
   },
-  
-  run = function(m = integer(), thresh_num = double()) {
+  run = function(m = integer(), thresh_num=double()) {
     returnType(double())
     declare(wts, double(1, m))
     declare(ids, integer(1, m))
+    declare(ess, double())
+    declare(llEst, double(1,m))
     for(i in 1:m) {
-      if(notFirst) { 
-        copy(mv, model, nodes = prevName, nodesTo = prevNode, row = i)
-        calculate(model, prevDeterm) }
+      if(notFirst) {  
+        copy(mv, model, nodes = prevXSName, nodesTo = prevNode, row = i)
+        calculate(model, prevDeterm) 
+      }
       simulate(model, thisNode)
-      copy(model, mv, nodes = thisNode, nodesTo = 'x', row = i)
+      copy(model, mv, nodes = thisNode, nodesTo = thisXName, row = i)
       calculate(model, thisDeterm)
       wts[i]  <- exp(calculate(model, thisData))
-    } 
-
-     # Normalize weights and calculate effective sample size 
-    ess <- 1/sum((wts/sum(wts))^2) 
+      if(notFirst){
+        llEst[i] <- wts[i]*mv['wts',i][1,(t-1)]
+      }
+      else{
+        llEst[i] <- wts[i]/m
+      }
+    }
+    
+    # Normalize weights and calculate effective sample size 
+    wts <- wts/sum(wts)
+    ess <- 1/sum(wts^2) 
     
     # Determine whether to resample by weights or not
     if(ess < thresh_num){
       rankSample(wts, m, ids, silent)
       for(i in 1:m){
-        copy(mv, mv, "x", thisName, ids[i], i)
+        copy(mv, mv, nodes = thisXName, nodesTo = thisXSName, row = ids[i], rowTo = i)
+        mv['wts',i][1,t] <<- 1/m
       }
     }
     else{
       for(i in 1:m){
-        copy(mv, mv, "x", thisName, i, i)
+        copy(mv, mv, "x", "xs", i, i)
+        mv['wts',i][1,t] <<- wts[i]
       }
     }
-    return(log(mean(wts)))
+    return(log(sum(llEst)))
   },  where = getLoadingNamespace()
 )
-
 
 #' Creates a particle filter (sequential monte carlo) algorithm to estimate the log-likelihood for a model sub-graph
 #'
 #' @param model A nimble model object, typically representing a state space model or a hidden Markov model
 #' @param nodes A character vector specifying the latent model nodes over which the particle filter will stochastically integrate over to estimate the log-likelihood function
 #' @param thresh A number between 0 and 1 specifying when to resample: the resampling step will occur when the effective sample size is less than thresh*(number of particles)
-#' @param saveLatent  Whether to save latent state samples for all time points (T), or only for the most recent time points (F)
+#' @param saveAll  Whether to save state samples for all time points (T), or only for the most recent time points (F)
 #' @author Daniel Turek
 #' @details The resulting specialized particle filter algorthm will accept a single integer argument (m, default 10,000), which specifies the number of random \'particles\' to use for estimating the log-likelihood.  The algorithm returns the estimated log-likelihood value, and saves samples from the posterior distribution of the latent states in mv['xs',]
 #' @examples
@@ -123,7 +151,7 @@ bootFStepS <- nimbleFunction(
 #' boot_X <- Cmy_PF$mv['xs',]
 
 buildBootF <- nimbleFunction(
-  setup = function(model, nodes, thresh = 0.5, silent = FALSE, saveLatent = FALSE) {
+  setup = function(model, nodes, thresh = 0.5, silent = FALSE, saveAll = FALSE) {
     my_initializeModel <- initializeModel(model)
     nodes <- model$expandNodeNames(nodes, sort = TRUE)
     dims <- lapply(nodes, function(n) nimbleDim(model[[n]]))
@@ -131,12 +159,13 @@ buildBootF <- nimbleFunction(
     if(0>thresh || 1<thresh || !is.numeric(thresh)) stop('thresh must be between 0 and 1')
     
     # Create mv variables for x state and sampled x states. 
-    # Size of mv['xs',] depends on value of saveLatent.
-    if(!saveLatent){
-      mv <- modelValues(modelValuesSpec(vars = c('x', 'xs'),
-                                      type = c('double', 'double'),
-                                      size = list(x = dims[[1]],
-                                                  xs = dims[[1]])))
+    # Size depends on whethersaveAll=T or not 
+    if(!saveAll){
+      mv <- modelValues(modelValuesSpec(vars = c('x', 'xs','wts'),  
+                                        type = c('double', 'double','double'),
+                                        size = list(x = dims[[1]],
+                                                    xs = dims[[1]],
+                                                    wts = dims[[1]])))
       bootStepFunctions <- nimbleFunctionList(auxStepVirtual)
       for(iNode in seq_along(nodes)){
         bootStepFunctions[[iNode]] <- bootFStepNS(model, mv, nodes, 
@@ -145,11 +174,15 @@ buildBootF <- nimbleFunction(
     }
 
     else{
-      mv <- modelValues(modelValuesSpec(vars = c('x', 'xs'),
-                                        type = c('double', 'double'),
-                                        size = list(x = dims[[1]],
+      mv <- modelValues(modelValuesSpec(vars = c('x', 'xs', 'wts'),
+                                        type = c('double', 'double', 'double'),
+                                        size = list(x = c(dims[[1]],
+                                                           length(dims)),
                                                     xs = c(dims[[1]],
-                                                           length(dims)))))
+                                                           length(dims)),
+                                                    wts = c(dims[[1]],
+                                                           length(dims))
+                                                    )))
       bootStepFunctions <- nimbleFunctionList(auxStepVirtual)
       for(iNode in seq_along(nodes)){
         bootStepFunctions[[iNode]] <- bootFStepS(model, mv, nodes, 
@@ -183,30 +216,44 @@ auxFStepNS <- nimbleFunction(
     thisDeterm <- model$getDependencies(thisNode, determOnly = TRUE)
     thisData   <- model$getDependencies(thisNode, dataOnly = TRUE)
     getmean <- normMean(model, thisNode)
+    isLast <- (iNode == length(nodes))
   },
   run = function(m = integer(), thresh_num=double()) {
     returnType(double())
     declare(auxWts, double(1,m))
     declare(auxl, double(1,m))
-    declare(tmpX, double(1,m))
     declare(wts, double(1,m))
     declare(l, double(1, m))
     declare(ids, integer(1, m))
     ess <- 0
     if(notFirst){ #can't do auxiliary step for first time point
       for(i in 1:m) {
-        copy(mv, model, 'xs', prevNode, row=i)
+        copy(mv, model, 'x', prevNode, row=i)
         calculate(model, prevDeterm) 
         model[[thisNode]] <<- getmean$return_mean()  # returns E(x_t+1 | x_t)
         calculate(model, thisDeterm)
         auxl[i] <- exp(calculate(model, thisData))
         auxWts[i] <- auxl[i]*mv['wts',i][1]
       }
-      rankSample(auxWts, m, ids, silent)
-    } 
+      auxWts <- auxWts/sum(auxWts)
+      ess <- 1/sum(auxWts^2)
+      if(ess<thresh_num){
+        resamp <- 1
+        rankSample(auxWts, m, ids, silent)
+        for(i in 1:m){
+          copy(mv, mv, 'x', 'xs', ids[i],i)
+        }
+      }
+      else{
+        resamp <- 0
+        for(i in 1:m){
+          copy(mv, mv, 'x', 'xs', i,i)
+        }
+      }
+    }  
     for(i in 1:m) {
       if(notFirst) {  
-        copy(mv, model, nodes = 'xs', nodesTo = prevNode, row = ids[i])
+        copy(mv, model, nodes = 'xs', nodesTo = prevNode, row = i)
         calculate(model, prevDeterm) 
       }
       simulate(model, thisNode)
@@ -214,22 +261,31 @@ auxFStepNS <- nimbleFunction(
       calculate(model, thisDeterm)
       l[i]  <- exp(calculate(model, thisData)) #likelihood
       #rescale weights by pre-sampling weight
-      if(notFirst)
-        wts[i] <- l[i]/auxl[ids[i]]
-      else 
-        wts[i] <- l[i]
+      if(notFirst){
+        if(resamp == 1){
+          mv['wts',i][1] <<- l[i]/auxl[ids[i]]
+        }
+        else{
+          mv['wts',i][1] <<- l[i]/auxl[i]
+        }
+      }
+      else {
+        mv['wts',i][1] <<- l[i]
+      }
     }   
-    
-    #normalizing weights and calculating effective sample size 
-    wts <- wts/sum(wts)
-    #ess <- 1/sum((l/sum(l))^2)
-    
-    #skipping second resample step as per Carpenter 1999 / Cappe 06
-    for(i in 1:m){
-      copy(mv, mv, "x", "xs", i, i)     
-      mv['wts',i][1] <<- wts[i]
+   
+    # Skipping second resample step as per Carpenter 1999 / Cappe 06,
+    # except for last time point.
+    if(isLast){
+      for(i in 1:m){
+        wts[i] <- mv['wts',i][1]
+      }
+      rankSample(wts, m, ids, silent)
+      for(i in 1:m){
+        copy(mv, mv, 'x', 'xs', ids[i],i)
+      }
     }
-    
+
     return(log(mean(l)))
   },  where = getLoadingNamespace()
 )
@@ -246,55 +302,78 @@ auxFStepS <- nimbleFunction(
     thisData   <- model$getDependencies(thisNode, dataOnly = TRUE) 
     #current time point
     t <- iNode
-    # Get names of xs node for current and previous time point (used in copy)
-    prevName <- paste("xs[,",t-1,"]",sep="")    
-    thisName <- paste("xs[,",t,"]",sep="")
+    # Get names of x and xs node for current and previous time point (used in copy)
+    prevXSName <- paste("xs[,",t-1,"]",sep="")    
+    thisXSName <- paste("xs[,",t,"]",sep="")
+    prevXName <- paste("x[,",t-1,"]",sep="")
+    thisXName <- paste("x[,",t,"]",sep="")
     getmean <- normMean(model, thisNode)
+    isLast <- (iNode == length(nodes))
   },
   run = function(m = integer(), thresh_num = double()) {
     returnType(double())
     declare(auxl, double(1,m))
     declare(auxWts, double(1,m))
+    declare(wts, double(1,m))
     declare(ids, integer(1, m))
-    declare(wts, double(1, m))
     declare(l, double(1,m))
     ess <- 0
     if(notFirst){
       for(i in 1:m) {
-        copy(mv, model, prevName, prevNode, row=i)
+        copy(mv, model, prevXName, prevNode, row=i)
         calculate(model, prevDeterm) 
         model[[thisNode]] <<- getmean$return_mean() # returns E(x_t+1 | x_t)
         calculate(model, thisDeterm)
         auxl[i] <- exp(calculate(model, thisData))
-        auxWts[i] <- auxl[i]*mv['wts',i][1]
+        auxWts[i] <- auxl[i]*mv['wts',i][1,t-1]
       }
-      rankSample(auxWts, m, ids, silent)
+      auxWts <- auxWts/sum(auxWts)
+      ess <- 1/sum(auxWts^2)
+      if(ess<thresh_num){
+        resamp <- 1
+        rankSample(auxWts, m, ids, silent)
+        for(i in 1:m){
+          copy(mv, mv, prevXName, prevXSName, ids[i],i)
+        }
+      }
+      else{
+        resamp <- 0
+        for(i in 1:m){
+          copy(mv, mv, prevXName, prevXSName, i,i)
+        }
+      }
     }   
     for(i in 1:m) {
       if(notFirst) {
-        copy(mv, model, nodes = prevName, nodesTo = prevNode, row = ids[i])
-        calculate(model, prevDeterm) }
+        copy(mv, model, nodes = prevXSName, nodesTo = prevNode, row = i)
+        calculate(model, prevDeterm) 
+      }
       simulate(model, thisNode)
-      copy(model, mv, nodes = thisNode, nodesTo = 'x', row = i)
+      copy(model, mv, nodes = thisNode, nodesTo = thisXName, row = i)
       calculate(model, thisDeterm)
       l[i]  <- exp(calculate(model, thisData))
-      if(notFirst)
-        wts[i] <- l[i]/auxl[ids[i]]
-      else 
-        wts[i] <- l[i]
-    } 
-    
-    #normalizing weights and calculating effective sample size
-    wts <- wts/sum(wts)
-    #ess <- 1/sum((l/sum(l))^2)
-    
-  
-
-    for(i in 1:m){
-      copy(mv, mv, "x", thisName, i, i)
-      mv['wts',i][1] <<- wts[i]
+      if(notFirst){
+        if(resamp == 1){
+          mv['wts',i][1,t] <<- l[i]/auxl[ids[i]]
+        }
+        else{
+          mv['wts',i][1,t] <<- l[i]/auxl[i]
+        }
+      }
+      else{
+        mv['wts',i][1,t] <<- l[i]
+      }
     }
     
+    if(isLast){
+      for(i in 1:m){
+        wts[i] <-  mv['wts',i][1,t] 
+      }
+      rankSample(wts, m, ids, silent)
+      for(i in 1:m){
+        copy(mv, mv, thisXName, thisXSName, ids[i], i)
+      }
+    }
     return(log(mean(l)))
   },  where = getLoadingNamespace()
 )
@@ -305,7 +384,7 @@ auxFStepS <- nimbleFunction(
 #' @param model A nimble model object, typically representing a state space model or a hidden Markov model
 #' @param nodes A character vector specifying the latent model nodes over which the Auxiliary particle filter will stochastically integrate over to estimate the log-likelihood function
 #' @param thresh A number between 0 and 1 specifying when to resample: the resampling step will occur when the effective sample size is less than thresh*(number of particles)
-#' @param saveLatent  Whether to save latent state samples for all time points (T), or only for the most recent time points (F)
+#' @param saveAll  Whether to save state samples for all time points (T), or only for the most recent time points (F)
 #' @author Nick Michaud
 #' @details Uses the Auxiliary Particle filter (Pitt & Shephard, 1999) algorithm which provides samples from f(x_t|y_t, x_t-1).  Sampled X values are stored in mv['xs',].  NOTE:  Filter currently assumes a normal transition equation f(x_t|x_t-1)!  Future functionality could include choice of g(x^(i)_t) function, currently restricted to E(x_t|x_t-1).
 #' @examples
@@ -315,7 +394,7 @@ auxFStepS <- nimbleFunction(
 #' Cmy_AuxF <- compileNimble(my_AuxF, project = model)
 #' logLike <- Cmy_AuxF(m = 100000)
 buildAuxF <- nimbleFunction(
-  setup = function(model, nodes, thresh=.5, silent = FALSE, saveLatent = FALSE) {
+  setup = function(model, nodes, thresh=.5, silent = FALSE, saveAll = FALSE) {
     my_initializeModel <- initializeModel(model)
     nodes <- model$expandNodeNames(nodes, sort = TRUE)
     dims <- lapply(nodes, function(n) nimbleDim(model[[n]]))
@@ -326,7 +405,7 @@ buildAuxF <- nimbleFunction(
     
     #  Create mv variables for x state and sampled x states.  If saveLatent=T, the sampled x states
     #  will be recorded at each time point. 
-    if(!saveLatent){
+    if(!saveAll){
       mv <- modelValues(modelValuesSpec(vars = c('x', 'xs','wts'),  
                                         type = c('double', 'double','double'),
                                         size = list(x = dims[[1]],
@@ -340,10 +419,12 @@ buildAuxF <- nimbleFunction(
     else{
       mv <- modelValues(modelValuesSpec(vars = c('x', 'xs','wts'),  
                                         type = c('double', 'double','double'),
-                                        size = list(x = dims[[1]],
+                                        size = list(x = c(dims[[1]],
+                                                          length(dims)),
                                                     xs = c(dims[[1]],
                                                            length(dims)),
-                                                    wts=dims[[1]])))
+                                                    wts=c(dims[[1]],
+                                                          length(dims)))))
       auxStepFunctions <- nimbleFunctionList(auxStepVirtual)
       for(iNode in seq_along(nodes))
         auxStepFunctions[[iNode]] <- auxFStepS(model, mv, nodes,

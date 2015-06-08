@@ -1,14 +1,13 @@
 #m and thresh defined externally
 
 #now let's code in SMC package
-nStreams <- m
 nPeriods <- length(data$y)
 dimPerPeriod <- 1
 threshnum <- m*thresh
 
 #auxiliary proposals
 generateStreamRepsFunc <- function(currentPeriod, lag1Streams, 
-                                   lag1LogWeights, streamIndices ,
+                                   lag1LogWeights, streamIndices , m,
                                     ...){
   outMat <- matrix(nrow = m, ncol=1)
   if(currentPeriod==1){
@@ -17,13 +16,14 @@ generateStreamRepsFunc <- function(currentPeriod, lag1Streams,
   else{
     outMat[,1] <- inits$a*lag1Streams[,1]+inits$b
   }
+  
   return(outMat)
 }
 
 #propogation step
 generateNextStreamsFunc <- function(currentPeriod, lag1Streams, 
                                     lag1LogWeights, streamIndices, 
-                                    streamReps, startingStreams, ...){
+                                    streamReps, startingStreams, m, ...){
   outMat <- matrix(nrow = m, ncol=1)
   if(currentPeriod==1){
     outMat[,1]<- rnorm(m, inits$b/(1-inits$a),  sqrt(inits$sigPN^2/(1-inits$a^2)))
@@ -31,6 +31,7 @@ generateNextStreamsFunc <- function(currentPeriod, lag1Streams,
   else{
     outMat[,1] <- rnorm(m, lag1Streams[streamIndices,1]*inits$a + inits$b, inits$sigPN)
   }
+  
   return(outMat)
 }
 
@@ -59,5 +60,7 @@ smcauxfunc <- function(nps){auxiliaryParticleFilter(nps, nPeriods, dimPerPeriod,
                                                   startingStreams=NULL,
                                                   nStreamsPreResamp=nps,
                                                   verboseLevel        = 0,     
-                                                  inits, data, threshnum,nps)}
+                                                  inits, data,m=nps)}
+
+
 

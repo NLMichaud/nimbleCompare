@@ -12,17 +12,23 @@ require(microbenchmark)
 require(FKF)
 require(ggplot2)
 require(pomp, quietly=TRUE)
+require("bi")
 
-load("model_SSMcorrelated.RData")
-source("auxF_build.R")
-source("LWF_build.R")
+load("data/model_SSMcorrelated.RData")
+source("filters/auxF_build.R")
+source("filters/LWF_build.R")
 
 thresh <- 1
-m <- 10000
 
+#define model in different packages
+source("smc/smc_compareCorr.R", echo=F, verbose=F)
+source("pomp/pomp_compareCorr.R", echo=F, verbose=F)
+source("biips/biips_compareCorr.R", echo=F, verbose=F)
+source("libbi/libbi_compareCorr.R", echo=F, verbose=F)
 
-source("smc_compareCorr.R", echo=F, verbose=F)
-source("pomp_compareCorr.R", echo=F, verbose=F)
+# Helpful functions for making comparison tables and plots
+source("compare_help_functions.R") 
+
 Rmodel <- nimbleModel(code, constants, data, inits)
 compileNimble(Rmodel)
 modAux <- buildAuxF(Rmodel, 'x', thresh=thresh)
@@ -31,6 +37,23 @@ modBoot <- buildBootF(Rmodel, 'x', thresh=thresh)
 cmodBoot <- compileNimble(modBoot, project=Rmodel)
 modLW <- buildLWF(Rmodel,'x')
 cmodLW <- compileNimble(modLW, project=Rmodel)
+
+#run a kalman filter for this model
+a0 <- inits$b/(1-inits$a)
+P0 <- matrix(inits$sigPN^2/(1-inits$a^2))
+dt <- matrix(inits$b)
+ct <- matrix(0)
+Tt <- matrix(inits$a)
+Zt <- matrix(1)
+HHt <- matrix(inits$sigPN^2)
+GGt <- matrix(inits$sigOE^2)
+yt <- matrix(data$y, ncol=100)
+kal <- fkf(a0, P0, dt, ct, Tt, Zt, HHt, GGt, yt, check.input = TRUE)
+
+nums <- seq(19.5,21,by=0.00015)
+plotm=50000  # number of particles to use for plotting
+kalDat <- data.frame(dens = dnorm(nums, kal$att[100],sqrt(kal$Ptt[100])), nums=nums)                  
+
 ```
 
 All of our comparisonswere made using Daniel's linear Gaussian model with the correlated parametrization.  
@@ -45,58 +68,26 @@ Below is a table summarizing the run times for these packages.  NIMBLE is faster
 
 
 
-```{r table, echo=FALSE, results='asis', message=FALSE, cache=TRUE}
-mvals <- c(100,1000,10000,50000)
-timelist <- data.frame()
-i=1
-for(m in mvals){
-  ntime <- microbenchmark(cmodAux$run(m), times=10, unit="s")
-  stime <- microbenchmark(smcauxfunc(m), times=10, unit='s')
-  timelist <- rbind(timelist,cbind("Method" = c("NIMBLE", "SMC Package"),"N. Particles" =c(m,m),rbind(summary(ntime), summary(stime))))
-  i = i+1
-}
-timelist <- timelist[,-c(3,5,6,8,10)]
-xtable(timelist)
+```{r smctable, echo=FALSE, results='asis', message=FALSE, cache=TRUE}
+smcTable <- TableCompare(mvals = c(100,1000,10000,50000), nreps = 10, nimFilt = cmodAux, otherFilt = smcauxfunc, 
+                         otherPack = "SMC R Package", filtType = "Auxiliary Filter", like = F)
+
+xtable(smcTable)
 ```
 
 \newpage
 Below we have histograms of the posterior distribution of the latent state *x* at the final time point for both package.  These posteriors are based on runs with 50,000 particles  The solid line is the estimate of the posterior distribution produced by the Kalman filter.  
 
-```{r preplot1, echo=FALSE, results='hide', message=FALSE, cache=TRUE}
+```{r smcAuxplot, echo=FALSE, results='asis', message=FALSE, cache=TRUE}
+cmodAux$run(plotm)
+smcVals <- smcauxfunc(plotm)
 
-#run a kalman filter for this model
-a0 <- inits$b/(1-inits$a)
-P0 <- matrix(inits$sigPN^2/(1-inits$a^2))
-dt <- matrix(inits$b)
-ct <- matrix(0)
-Tt <- matrix(inits$a)
-Zt <- matrix(1)
-HHt <- matrix(inits$sigPN^2)
-GGt <- matrix(inits$sigOE^2)
-yt <- matrix(data$y, ncol=100)
-kal <- fkf(a0, P0, dt, ct, Tt, Zt, HHt, GGt, yt, check.input = TRUE)
+smcAuxplot <- PlotCompare(plotm, nimFilt = cmodAux, otherOut = smcVals$draws$streams[,1,100],
+                                     otherPack = "SMC", filtType = "Auxiliary Filter", 
+                                     othWts = exp(smcVals$draws$logWeights[,100]),
+                                     kalmanDat = kalDat)
 
-#
-nums <- seq(19.5,21,by=0.00015)
-m=50000
-cmodAux$run(m)
-aa <- smcauxfunc(m)
-
-#put posteriors from different packages in easy-to-plot format. Weight particles by wts in histogram
-posts <- data.frame(vals =c(unlist(cmodAux$mv['xs',]),aa$draws$streams[,1,100]),
-                    package = c(rep("Nimble",m),rep("SMC",m)),
-                    wts = c(unlist(cmodAux$mv['wts',]),exp(aa$draws$logWeights[,100])))
-#get kalman filter ready for plotting
-pldat <- data.frame(dens = dnorm(nums, kal$att[100],sqrt(kal$Ptt[100])), nums=nums)                  
-
-#create plot
-g1 <- ggplot(posts, aes(vals))+geom_histogram(aes(y=..density.., weight=wts),binwidth=0.02,colour = "darkgreen", fill = "white")+
-  facet_wrap(~package, nrow=2)+
-  geom_line(data=pldat, aes(x=nums, y=dens))+scale_x_continuous("",limits=c(19.8, 20.5))+ ggtitle("Auxiliary Posteriors for X")
-
-suppressWarnings(print(g1))
-
-
+suppressWarnings(print(smcAuxplot))
 ```
 \newpage
 
@@ -108,19 +99,10 @@ POMP has the Bootstrap filter and Liu and West filters implemented, so we compar
 First, we compare the Bootstrap filter between NIMBLE and POMP.  POMP has an advantage over NIMBLE, although they both run very quickly, even for high particle counts.  In addition, POMP returns log likelihood estimates, which can be compared to the log likelihood estimates from NIMBLE.  The estimates match up well.
 
 ```{r pompbootTable, echo=FALSE, results='asis', message=FALSE, cache=TRUE}
-mvals <- c(100,1000,10000,50000)
-timelist <- data.frame()
-i=1
-for(m in mvals){
-  nboottime <- microbenchmark(cmodBoot$run(m), times=10, unit="s")
-  nbootlik <- mean(sapply(rep(m,10),function(x)cmodBoot$run(x)))
-  pboottime <- microbenchmark(pompPf(m), times=10, unit='s')
-  pbootlike <- mean(sapply(rep(m,10),function(x)logLik(pompPf(x))))
-  timelist <- rbind(timelist,cbind("Method" = c("NIMBLE Bootstrap", "POMP Bootstrap"),"N. Particles" =c(m,m),"Mean Log Lik." = c(nbootlik, pbootlike),rbind(summary(nboottime), summary(pboottime))))
-  i = i+1
-}
-timelist <- timelist[,-c(4,6,7,9,11)]
-xtable(timelist)
+pompBootTable <- TableCompare(mvals = c(100, 1000, 10000, 50000), nreps = 10, nimFilt = cmodBoot, otherFilt = pompPf, 
+                         otherPack = "POMP R Package", filtType = "Bootstrap Filter", like = T)
+
+xtable(pompBootTable)
 ```
 
 
@@ -132,19 +114,10 @@ Next, we compare the Liu and West filter between NIMBLE and POMP.  Here, NIMBLE 
 Note: running the Liu-West filter for a small number of particles (<1000, or possibly even <10000 depending on the model & prior distributions) is apparently a bad idea: the MC covariance matrix for the parameters will frequently be non-positive definite due to only a few particles having large weights at early time points, which causes filter to crash.  
 
 ```{r pomplwTable, echo=FALSE, results='asis', message=FALSE, cache=TRUE}
-mvals <- c(10000,50000)
-timelist <- data.frame()
-i=1
-for(m in mvals){
-  nlwtime <- microbenchmark(cmodLW$run(m), times=10, unit="s")
-  nlwlik <- mean(sapply(rep(m,10),function(x)cmodLW$run(x)))
-  plwtime <- microbenchmark(pompLW(m), times=10, unit='s')
-  plwlik <- mean(sapply(rep(m,10),function(x)pompLW(x)$log.evidence))
-  timelist <- rbind(timelist,cbind("Method" = c("NIMBLE Liu-West", "POMP Liu-West"),"N. Particles" =c(m,m),"Mean Log Lik." = c(nlwlik, plwlik),rbind(summary(nlwtime), summary(plwtime))))
-  i = i+1
-}
-timelist <- timelist[,-c(4,6,7,9,11)]
-xtable(timelist)
+pompLWTable <- TableCompare(mvals = c(10000,50000), nreps = 10, nimFilt = cmodLW, otherFilt = pompLW, 
+                         otherPack = "POMP R Package", filtType = "Liu and West Filter", like = F)
+
+xtable(pompLWTable)
 ```
 Below we plot the posterior distributions of our parameters.  These posteriors are based off of a single run with 100,000 particles in both NIMBLE and POMP.  POMP does not return the posterior distribution of the state space for the Liu-West filter, so we were unable to compare this to NIMBLE.
 
@@ -197,54 +170,22 @@ LibBi has implementations of the Bootstrap and Auxiliary particle filters.  Note
 We first compare the Bootstap filter between NIMBLE and LibBi.  LibBi is faster at higher numbers of particles.  The log likelihood estimates match up well, and the posteriors look correct.  
 
 ```{r libbiboottab, echo=FALSE, results='asis', message=FALSE, cache=TRUE}
-require("bi")
-init_bi <- bi_wrapper$new(client="filter", model_file_name = "corrMod.bi",
-                          config="model_config.conf")
-
-
-mvals <- c(100,1000,10000,50000)
-
-
-bibootLike <- function(m){
-  init_bi$run(add_options=paste("--init-file initvars.nc  --filter bootstrap  --nparticles ", m, sep=""))
-  return(bi_read_var(init_bi$result$output_file_name, "LL"))
-}
-
-timelist <- data.frame()
-i=1
-for(m in mvals){
-  nboottime <- microbenchmark(cmodBoot$run(m), times=10, unit="s")
-  nbootlik <- mean(sapply(rep(m,10),function(x)cmodBoot$run(x)))
-  lboottime <- microbenchmark(init_bi$run(add_options=paste("--init-file initvars.nc  --filter bootstrap  --nparticles ", m, sep="")), times=10, unit='s')
-  lbootlike <- mean(sapply(rep(m,10),function(x)bibootLike(x)))
-  timelist <- rbind(timelist,cbind("Method" = c("NIMBLE Bootstrap", "LibBi Bootstrap"),
-                                   "N. Particles" =c(m,m),"Mean Log Lik." = c(nbootlik, lbootlike),
-                                   rbind(summary(nboottime), summary(lboottime))))
-  i = i+1
-}
-
-timelist <- timelist[,-c(4,6,7,9,11)]
-boottable <- xtable(timelist)
-boottable
+libbiBootTable <- TableCompare(mvals = c(100,1000,10000,50000), nreps = 10, nimFilt = cmodBoot, 
+                               otherFilt = bibootLike, otherPack = "LibBi", 
+                               filtType = "Bootstrap Filter", like = T)
+xtable(libbiBootTable)
 ```
+
 ```{r libbibootplot, echo=FALSE, results='asis', message=FALSE, cache=TRUE}
+cmodBoot$run(plotm)
+init_bi$run(add_options=paste("--init-file initvars.nc  --filter bootstrap  --nparticles ", plotm, sep=""))
 
-m=50000
-
-cmodBoot$run(m)
-init_bi$run(add_options=paste("--init-file initvars.nc  --filter bootstrap  --nparticles ", m, sep=""))
-
-plotmat <- data.frame(value = c(as.matrix(cmodBoot$mv, 'xs'), bi_read_var(init_bi$result$output_file_name, "x")[100,]),
-                      package=c(rep("Nimble",m),rep("LibBi",m)),
-                      wtz=c(rep(1,m),exp(bi_read_var(init_bi$result$output_file_name, "logweight")[100,])))
-bootplot <- ggplot(plotmat, aes(x=value))+
-  geom_histogram(aes(y=..density.., weights=wtz),binwidth=0.01,
-                 colour = "darkgreen", fill = "white")+ 
-  facet_wrap(~package, nrow=2, as.table=F)+ 
-  ggtitle(expression(paste("Bootstrap Posteriors for ", x,sep="")))+
-  geom_line(data=pldat, aes(x=nums, y=dens))
-bootplot
-suppressWarnings(print(bootplot))
+libbiBootplot <- PlotCompare(plotm, nimFilt = cmodBoot, 
+                             otherOut = bi_read_var(init_bi$result$output_file_name, "x")[100,],
+                             otherPack = "LibBi", filtType = "Bootstrap Filter", 
+                             othWts = exp(bi_read_var(init_bi$result$output_file_name, "logweight")[100,]),
+                             kalmanDat = kalDat)
+suppressWarnings(print(libbiBootPlot))
 ```
 
 
@@ -253,113 +194,53 @@ suppressWarnings(print(bootplot))
 We next compare the Auxiliary filter between NIMBLE and LibBi.  Again, LibBi seems faster at higher numbers of particles.  The log likelihood estimates from NIMBLE still seem off, but the posteriors match up well.
 
 ```{r libbiauxtab, echo=FALSE, results='asis', message=FALSE}
-
-biauxLike <- function(m){
-  init_bi$run(add_options=paste("--init-file initvars.nc  --filter lookahead  --nparticles ", m, sep=""))
-  return(bi_read_var(init_bi$result$output_file_name, "LL"))
-}
-
-timelist <- data.frame()
-i=1
-for(m in mvals){
-  nauxtime <- microbenchmark(cmodAux$run(m), times=10, unit="s")
-  nauxlik <- mean(sapply(rep(m,10),function(x)cmodAux$run(x)))
-  lauxtime <- microbenchmark(init_bi$run(add_options = 
-                                           paste("--init-file initvars.nc 
-                                                 --filter lookahead 
-                                                 --nparticles ", m, sep="")),
-                             times=10, unit='s')
-  lauxlike <- mean(sapply(rep(m,10),function(x)biauxLike(x)))
-  timelist <- rbind(timelist,cbind("Method" = c("NIMBLE Auxiliary", "LibBi Auxiliary"),
-                                   "N. Particles" =c(m,m),"Mean Log Lik." = c(nauxlik, lauxlike),
-                                   rbind(summary(nauxtime), summary(lauxtime))))
-  i = i+1
-}
-
-timelist <- timelist[,-c(4,6,7,9,11)]
-auxtable <- xtable(timelist)
-auxtable
+libbiAuxTable <- TableCompare(mvals = c(100,1000,10000,50000), nreps = 10, nimFilt = cmodAux, otherFilt = biauxLike, 
+                         otherPack = "LibBi", filtType = "Auxiliary Filter", like = T)
+xtable(libbiAuxTable)
 ```
 
 ```{r libbiauxplot, echo=FALSE, results='asis', message=FALSE}
-m=50000
-
-cmodAux$run(m)
+cmodAux$run(plotm)
 init_bi$run(add_options = paste("--init-file initvars.nc
-                                --filter lookahead  --nparticles ", m, sep=""))
+                                --filter lookahead  --nparticles ", plotm, sep=""))
 
-plotmat <- data.frame(value = c(as.matrix(cmodAux$mv, 'xs'),
-                                bi_read_var(init_bi$result$output_file_name, "x")[100,]),
-                      package=c(rep("Nimble",m),rep("LibBi",m)),
-                      wtz= c(as.matrix(cmodAux$mv, 'wts'), 
-                             exp(bi_read_var(init_bi$result$output_file_name, "logweight")[100,])))
-
-auxplot <- ggplot(plotmat, aes(x=value))+
-  geom_histogram(aes(y=..density.., weight=wtz),binwidth=0.01,
-                 colour = "darkgreen", fill = "white")+ 
-  facet_wrap(~package, nrow=2, as.table=F)+ 
-  ggtitle(expression(paste("Auxiliary Posteriors for ", x,sep="")))+
-  geom_line(data=pldat, aes(x=nums, y=dens))
-suppressWarnings(print(auxplot))
+libbiAuxplot <- PlotCompare(plotm, nimFilt = cmodBoot, 
+                             otherOut = bi_read_var(init_bi$result$output_file_name, "x")[100,],
+                             otherPack = "LibBi", filtType = "Auxiliart Filter", 
+                             othWts = exp(bi_read_var(init_bi$result$output_file_name, "logweight")[100,]),
+                             kalmanDat = kalDat)
+suppressWarnings(print(libbiAuxPlot))
 ```
+\newpage
 
 ##NIMBLE vs. Biips
 
 
 Below we provide a comparison of NIMBLE to Biips. NIMBLE is significantly faster than Biips for large numbers of particles.  We found that Biips took over a minute for each run of 50,000 particles, so we decided to only include a maximum of 10,000 particles in the table below.  
 
-```{r biipstable, echo=FALSE, results='hide', message=FALSE, cache=TRUE}
-library(Rbiips)
+```{r biipscalc, echo=FALSE, results='hide', message=FALSE, cache=TRUE}
+# Need to run biips calculations with results='hide', otherwise prints status updates
+# which seemingly can't be avoided.
+biipsBootTable <- TableCompare(mvals = c(100,1000,10000,50000), nreps = 10, nimFilt = cmodLW, otherFilt = bipLikeFunc, 
+                         otherPack = "Biips", filtType = "Bootstrap Filter", like = T)
 
-biipsDat <- constants
-biipsDat$y <- data$y
-biipsDat$a <- inits$a
-biipsDat$b <- inits$b
-biipsDat$sigPN <- inits$sigPN
-biipsDat$sigOE <- inits$sigOE
-bmod <- biips_model("corrMod.BUGS", biipsDat, quiet=TRUE)
-bipLikeFunc  <- function(m){ biips_smc_samples(bmod, 'x[1:100]', m, type = "f",
-                                               rs_thres=1 )$log_marg_like}
+biipsBootTable <- xtable(biipsBootTable)
 
-timelist <- data.frame()
-for(m in mvals){
-  nboottime <- microbenchmark(cmodBoot$run(m), times=10, unit="s")
-  nbootlik <- mean(sapply(rep(m,10),function(x)cmodBoot$run(x)))
-  bboottime <- microbenchmark(biips_smc_samples(bmod, 'x[1:100]', m, type = "f",
-                                                rs_thres=1 ),
-                              times=10, unit="s")
-  bbootlike <- mean(sapply(rep(m,10),function(x)bipLikeFunc(x)))
-  timelist <- rbind(timelist,cbind("Method" = c("NIMBLE Bootstrap"
-                                                , "Biips Bootstrap"),
-                                   "N. Particles" =c(m,m),
-                                   "Mean Log Lik." = c(nbootlik, bbootlike),
-                                   rbind(summary(nboottime), 
-                                         summary(bboottime))))
-}
 
-timelist <- timelist[,-c(4,6,7,9,11)]
-boottable <- xtable(timelist)
-m=50000
 
-cmodBoot$run(m)
-biipsOut <- biips_smc_samples(bmod, 'x[1:100]', m, type = "f", rs_thres=1 )
+cmodBoot$run(plotm)
+biipsOut <- biips_smc_samples(bmod, 'x[1:100]', plotm, type = "f", rs_thres=1 )
 
-plotmat <- data.frame(value = c(as.matrix(cmodBoot$mv, 'xs'),
-                                biipsOut$x$f$values[100,]),
-                      package=c(rep("Nimble",m),rep("Biips",m)),
-                      wtz= c(rep(1,m), biipsOut$f$weights[100,]))
-
-bootplot <- ggplot(plotmat, aes(x=value))+
-  geom_histogram(aes(y=..density.., weight=wtz),binwidth=0.01,
-                 colour = "darkgreen", fill = "white")+ 
-  facet_wrap(~package, nrow=2, as.table=F)+ 
-  ggtitle(expression(paste("Bootstrap Posteriors for ", x,sep="")))+
-  geom_line(data=pldat, aes(x=nums, y=dens))
+biipsBootplot <- PlotCompare(plotm, nimFilt = cmodBoot, 
+                             otherOut = biipsOut$x$f$values[100,],
+                             otherPack = "Biips", filtType = "Bootstrap Filter", 
+                             othWts = biipsOut$f$weights[100,],
+                             kalmanDat = kalDat)
 ```
 
 
 ```{r biipsout, echo=FALSE, results='asis', message=FALSE, cache=TRUE}
-boottable
+biipsBootTable
 
-suppressWarnings(print(bootplot))
+suppressWarnings(print(biipsBootplot))
 ```

@@ -209,7 +209,6 @@ buildLWF <- nimbleFunction(
     for(i in 1:m)
       mv['wts',i][1] <<- 1/m
     logL <- 0
-    print("preloop")
     for(iNode in seq_along(LWStepFunctions)) {
       logL <- logL + LWStepFunctions[[iNode]]$run(m)
       if(logL == -Inf) return(logL) }

@@ -24,8 +24,9 @@ modelPomp <- pomp(data=pompdat, time="times", rprocess=discrete.time.sim(mod.ste
                   t0=1, initializer=initializer, obsnames="y", give_log=1)
 
 pompPf <- function(nps){
-  pfilter(modelPomp,Np=nps,params=c(b=inits$b,a=inits$a,sigPN=inits$sigPN,sigOE=inits$sigOE),
+  tmp <- pfilter(modelPomp,Np=nps,params=c(b=inits$b,a=inits$a,sigPN=inits$sigPN,sigOE=inits$sigOE),
               save.states=T)
+  return(logLik(tmp))
 }
 
 
@@ -37,6 +38,7 @@ pompLW <- function(nps){
   simPrior[3,] <- runif(nps, 0.0001, 1)
   simPrior[4,] <- runif(nps, 0.0001, 1)
   rownames(simPrior) <- c("b","a","sigPN", "sigOE")
-  return(bsmc(modelPomp, params=simPrior, nP=nps))
+  tmp <- bsmc(modelPomp, params=simPrior, nP=nps)
+  return(tmp$log.evidence)
 }
 
