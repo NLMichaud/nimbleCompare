@@ -21,13 +21,13 @@ normMean <- nimbleFunction(
   setup = function(model, node) {
     nfList <- nimbleFunctionList(node_stoch_dnorm)
     nfList[[1]] <- model$nodeFunctions[[node]]
-  },  where = getLoadingNamespace(),
+  },  
   methods = list(                        
     return_mean = function() {         
       returnType(double())           
       return(nfList[[1]]$get_mean()) 
     }                                  
-  )                                      
+  ), where = getLoadingNamespace()                                    
 )
 
 LWStepNS <- nimbleFunction(
@@ -119,7 +119,7 @@ LWparFunc <- nimbleFunction(
     # Calculate h^2 and a using specified discount factor d
     hsq <- 1-((3*d-1)/(2*d))^2 
     a <- sqrt(1-hsq)
-  },  where = getLoadingNamespace(),
+  },  
   methods = list(                        
     shrinkMean = function(m = integer()) {
       declare(parMean, double(2))
@@ -147,16 +147,31 @@ LWparFunc <- nimbleFunction(
       varMat <- hsq*varMat
       return(chol(varMat))
     }
-  )     
+  ), where = getLoadingNamespace() 
 )
 
-#' Creates a Liu and West filter which provides esitmates of the posterior distribution of the latent state and parameters
+#' Creates a Liu and West filter.
 #'
-#' @param model A nimble model object, typically representing a state space model or a hidden Markov model
-#' @param nodes A character vector specifying the latent model nodes over which the particle filter will stochastically integrate over to estimate the log-likelihood function
-#' @param d  A discount factor for the LW filter.  Should be close to, but not above, 1.
+#' @param model A nimble model object, typically representing a state 
+#'  space model or a hidden Markov model
+#' @param nodes A character vector specifying the latent model nodes 
+#'  over which the particle filter will stochastically integrate over to
+#'  estimate the log-likelihood function
+#' @param params A character vector sepcifying the parameters you would 
+#'  like to estimate.
+#' @param d  A discount factor for the LW filter.  Should be close to,
+#'  but not above, 1.
 #' @author Nick Michaud
-#' @details The resulting specialized particle filter algorthm will accept a single integer argument (m, default 10,000), which specifies the number of random \'particles\' to use for estimating the log-likelihood.  The algorithm returns the estimated log-likelihood value, and saves samples from the posterior distribution of the latent states in mv['xs',] and from the posterior distribution of the parameters in mv['params',]
+#' @family filtering methods
+#' @details The resulting specialized particle filter algorthm will accept a
+#'  single integer argument (m, default 10,000), which specifies the number
+#'  of random \'particles\' to use for estimating the log-likelihood.  The algorithm 
+#'  returns the estimated log-likelihood value, and saves
+#'  unequally weighted samples from the posterior distribution of the latent
+#'  states in mv['x',], with corresponding unlogged weights in mv['wts',].
+#'  An equally weighted sample from the posterior can be found in mv['xs',]. 
+#'  Samples from the posterior distribution of the specified parameters are in
+#'  mv['params',].
 #' @examples
 #' model <- nimbleModel(code = ...)
 #' my_LWF <- buildPF(model, 'x[1:100]')
@@ -164,7 +179,8 @@ LWparFunc <- nimbleFunction(
 #' Cmy_LWF <- compileNimble(my_LWF, project = model)
 #' logLike <- Cmy_LWF(m = 100000)
 #' lw_X <- Cmy_LWF$mv['xs',]
-#' lw_pars <- Cmy_LWF$mc['pars',]
+#' lw_pars <- Cmy_LWF$mv['pars',]
+#' @export
 buildLWF <- nimbleFunction(
   setup = function(model, nodes, params=NA, d = .99, silent = FALSE) {
     my_initializeModel <- initializeModel(model)

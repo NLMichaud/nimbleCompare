@@ -17,6 +17,7 @@ require("bi")
 load("data/model_SSMcorrelated.RData")
 source("filters/auxF_build.R")
 source("filters/LWF_build.R")
+source("filters/bootF_build.R")
 
 thresh <- 1
 
