@@ -1,0 +1,13 @@
+base
+knitr
+xtable
+nimble
+SMC
+microbenchmark
+RUnit
+FKF
+ggplot2
+pomp
+Rcpp
+Rbiips
+igraph

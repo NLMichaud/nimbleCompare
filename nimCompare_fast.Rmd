@@ -1,0 +1,278 @@
+---
+title: "NIMBLE comparisons to SMC, POMP, and Biips using fastCopy branch"
+output: pdf_document
+---
+
+```{r setup, echo=FALSE, results='none', message=FALSE}
+require(knitr)
+require(xtable)
+require(nimble)
+require(SMC, quietly=TRUE)
+require(microbenchmark)     
+require(FKF)
+require(ggplot2)
+require(pomp, quietly=TRUE)
+require(Rbiips)
+#require("bi")
+
+load("data/model_SSMcorrelated.RData")
+source("filters/auxF_build.R")
+source("filters/LWF_build.R")
+source("filters/bootF_build.R")
+
+thresh <- 1
+
+#define model in different packages
+source("smc/smc_compareCorr.R", echo=F, verbose=F)
+source("pomp/pomp_compareCorr.R", echo=F, verbose=F)
+source("biips/biips_compareCorr.R", echo=F, verbose=F)
+#source("libbi/libbi_compareCorr.R", echo=F, verbose=F)
+
+# Helpful functions for making comparison tables and plots
+source("compare_help_functions.R") 
+
+Rmodel <- nimbleModel(code, constants, data, inits)
+compileNimble(Rmodel)
+modAux <- buildAuxF(Rmodel, 'x', thresh=thresh)
+cmodAux <- compileNimble(modAux, project=Rmodel)
+modBoot <- buildBootF(Rmodel, 'x', thresh=thresh)
+cmodBoot <- compileNimble(modBoot, project=Rmodel)
+modLW <- buildLWF(Rmodel,'x')
+cmodLW <- compileNimble(modLW, project=Rmodel)
+
+#run a kalman filter for this model
+a0 <- inits$b/(1-inits$a)
+P0 <- matrix(inits$sigPN^2/(1-inits$a^2))
+dt <- matrix(inits$b)
+ct <- matrix(0)
+Tt <- matrix(inits$a)
+Zt <- matrix(1)
+HHt <- matrix(inits$sigPN^2)
+GGt <- matrix(inits$sigOE^2)
+yt <- matrix(data$y, ncol=100)
+kal <- fkf(a0, P0, dt, ct, Tt, Zt, HHt, GGt, yt, check.input = TRUE)
+
+nums <- seq(19.5,21,by=0.00015)
+plotm=50000  # number of particles to use for plotting
+kalDat <- data.frame(dens = dnorm(nums, kal$att[100],sqrt(kal$Ptt[100])), nums=nums)                  
+
+```
+
+All of our comparison swere made using Daniel's linear Gaussian model with the correlated parametrization.  
+
+
+## fastCopy vs. previous build
+
+We begin by comparing the performance of various particle filters using the fastCopy build of NIMBLE to their performance under the previous devel version.  Below are our results for the bootstrap filter. In general, the run-times for both versions of NIMBLE scale linearly with the number of particles.  However, the fastCopy build consistently runs between 2 - 3 times faster than the devel branch.
+
+```{r bootComp, echo=FALSE, results='asis', message=FALSE, cache=FALSE, warning=FALSE}
+nreps = 10
+
+nimbleOptions(useNewNimCopy = FALSE) ## default is TRUE
+Rmodel <- nimbleModel(code, constants, data, inits)
+compileNimble(Rmodel)
+
+modBoot <- buildBootF(Rmodel, 'x', thresh=thresh)
+cmodBoot <- compileNimble(modBoot, project=Rmodel)
+
+
+  timelist <- data.frame(Method = NA, N.Particles = NA, Min = NA, Median = NA, Mean = NA, Max = NA)
+  nimTempTimes <- rep(NA, nreps)
+  for(m in c(100, 1000, 10000, 50000)){
+    for(n in 1:nreps){
+      nimTempTimes[n] <- sum(system.time(cmodBoot$run(m))[1:2])
+    }
+    timelist <- rbind(timelist,c("Method" = "NIMBLE devel Bootstrap",
+                                       "N. Particles" =m,
+                                       summary(nimTempTimes)[c(1,3,4,6)]))
+    }
+  
+nimbleOptions(useNewNimCopy = TRUE) ## default is TRUE
+Rmodel <- nimbleModel(code, constants, data, inits)
+compileNimble(Rmodel)
+
+modBoot <- buildBootF(Rmodel, 'x', thresh=thresh)
+cmodBoot <- compileNimble(modBoot, project=Rmodel)
+
+  nimTempTimes <- rep(NA, nreps)
+  for(m in c(100, 1000, 10000, 50000)){
+    for(n in 1:nreps){
+      nimTempTimes[n] <- sum(system.time(cmodBoot$run(m))[1:2])
+    }
+    timelist <- rbind(timelist,c("Method" = "NIMBLE fastCopy Bootstrap",
+                                       "N. Particles" =m,
+                                       summary(nimTempTimes)[c(1,3,4,6)]))
+    }
+
+timelist <- timelist[-1,]
+
+timelist <- timelist[c(1,5,2,6,3,7,4,8),]
+
+xtable(timelist)
+  
+```
+
+Below are the results for the auxiliary filter.  Again, we see the fastCopy build running between 2 - 3 times as fast as the devel build.  In addition, for the same number of particles, the auxiliary filter runs about 20\% slower than the bootstrap filter.
+
+```{r auxComp, echo=FALSE, results='asis', message=FALSE, cache=FALSE, warning=FALSE}
+nreps = 10
+
+nimbleOptions(useNewNimCopy = FALSE) ## default is TRUE
+Rmodel <- nimbleModel(code, constants, data, inits)
+compileNimble(Rmodel)
+
+modAux <- buildAuxF(Rmodel, 'x', thresh=thresh)
+cmodAux <- compileNimble(modAux, project=Rmodel)
+  timelist <- data.frame(Method = NA, N.Particles = NA, Min = NA, Median = NA, Mean = NA, Max = NA)
+
+  nimTempTimes <- rep(NA, nreps)
+  for(m in c(100, 1000, 10000, 50000)){
+    for(n in 1:nreps){
+      nimTempTimes[n] <- sum(system.time(cmodAux$run(m))[1:2])
+    }
+    timelist <- rbind(timelist,c("Method" = "NIMBLE devel Auxiliary Filter",
+                                       "N. Particles" =m,
+                                       summary(nimTempTimes)[c(1,3,4,6)]))
+    }
+  
+nimbleOptions(useNewNimCopy = TRUE) ## default is TRUE
+Rmodel <- nimbleModel(code, constants, data, inits)
+compileNimble(Rmodel)
+
+modAux <- buildAuxF(Rmodel, 'x', thresh=thresh)
+cmodAux <- compileNimble(modAux, project=Rmodel)
+
+
+  nimTempTimes <- rep(NA, nreps)
+  for(m in c(100, 1000, 10000, 50000)){
+    for(n in 1:nreps){
+      nimTempTimes[n] <- sum(system.time(cmodAux$run(m))[1:2])
+    }
+    timelist <- rbind(timelist,c("Method" = "NIMBLE fastCopy Auxiliary Filter",
+                                       "N. Particles" =m,
+                                       summary(nimTempTimes)[c(1,3,4,6)]))
+    }
+
+
+timelist <- timelist[-1,]
+
+timelist <- timelist[c(1,5,2,6,3,7,4,8),]
+xtable(timelist)
+  
+```
+
+Below are the results for the Liu and West filter.  For the Liu and West filter, for large numbers of particles, the fastCopy build runs about 30\% quicker than the devel build.  This is possibly because more of the time in the Liu and West filter is spent doing mathematical operations  / generating new parameter values than in the other filters.
+
+
+```{r LWComp, echo=FALSE, results='asis', message=FALSE, cache=FALSE, warning=FALSE}
+nreps = 10
+
+nimbleOptions(useNewNimCopy = FALSE) ## default is TRUE
+Rmodel <- nimbleModel(code, constants, data, inits)
+compileNimble(Rmodel)
+
+modLW <- buildLWF(Rmodel,'x')
+cmodLW <- compileNimble(modLW, project=Rmodel)
+
+  timelist <- data.frame(Method = NA, N.Particles = NA, Min = NA, Median = NA, Mean = NA, Max = NA)
+  nimTempTimes <- rep(NA, nreps)
+  for(m in c(100, 1000, 10000)){
+    for(n in 1:nreps){
+      nimTempTimes[n] <- sum(system.time(cmodLW$run(m))[1:2])
+    }
+    timelist <- rbind(timelist,c("Method" = "NIMBLE devel LW Filter",
+                                       "N. Particles" =m,
+                                       summary(nimTempTimes)[c(1,3,4,6)]))
+    }
+  
+nimbleOptions(useNewNimCopy = TRUE) ## default is TRUE
+Rmodel <- nimbleModel(code, constants, data, inits)
+compileNimble(Rmodel)
+
+modLW <- buildLWF(Rmodel,'x')
+cmodLW <- compileNimble(modLW, project=Rmodel)
+
+
+  nimTempTimes <- rep(NA, nreps)
+  for(m in c(100, 1000, 10000)){
+    for(n in 1:nreps){
+      nimTempTimes[n] <- sum(system.time(cmodLW$run(m))[1:2])
+    }
+    timelist <- rbind(timelist,c("Method" = "NIMBLE fastCopy LW Filter",
+                                       "N. Particles" =m,
+                                       summary(nimTempTimes)[c(1,3,4,6)]))
+    }
+
+timelist <- timelist[-1,]
+
+timelist <- timelist[c(1,4,2,5,3,6),]
+xtable(timelist)
+  
+```
+
+\newpage
+
+In the rest of the document, we rerun our prevous comparisons of NIMBLE to the SMC package, the POMP package, and Biips, using the fastCopy branch,
+
+##NIMBLE vs. SMC
+
+For large numbers of particles, NIMBLE now runs between approximately 10 times (for 10,000 particles) and 35 times (for 50,000 particles) faster than the SMC package.
+
+```{r smctable, echo=FALSE, results='asis', message=FALSE, cache=TRUE}
+smcTable <- TableCompare(mvals = c(100,1000,10000,50000), nreps = 10, nimFilt = cmodAux, otherFilt = smcauxfunc, 
+                         otherPack = "SMC R Package", filtType = "Auxiliary Filter", like = F)
+
+xtable(smcTable)
+```
+
+\newpage
+
+##NIMBLE vs. POMP
+
+POMP has the Bootstrap filter and Liu and West filters implemented, so we compare them to the NIMBLE implementation.
+
+
+First, we compare the Bootstrap filter between NIMBLE and POMP.  Whereas previously POMP ran significantly faster than NIMBLE for the bootstrap filter, we now see very comparable times across a range of particle values.  
+
+```{r pompboot, echo=FALSE, results='asis', message=FALSE, cache=TRUE}
+load("pboot.Rdata")
+xtable(pompBootTable)
+```
+
+
+
+\newpage
+
+Next, we compare the Liu and West filter between NIMBLE and POMP.  NIMBLE previously had a speed advantage over POMP for the Liu and West filter, and that advantage has grown with the fastCopy branch.    
+
+```{r pomplwTable, echo=FALSE, results='asis', message=FALSE, cache=TRUE}
+pompLWTable <- TableCompare(mvals = c(10000,50000), nreps = 10, nimFilt = cmodLW, otherFilt = pompLW, 
+                         otherPack = "POMP R Package", filtType = "Liu and West Filter", like = F)
+save(pompLWTable, file = "pompLWTable.Rdata")
+load("pompLWTable.Rdata")
+xtable(pompLWTable)
+```
+
+
+
+
+##NIMBLE vs. Biips
+
+
+Finally, we provide a comparison of NIMBLE to Biips. NIMBLE runs between 5 and 8 times faster than Biips for varying numbers of particles. 
+
+```{r biipscalc, echo=FALSE, results='hide', message=FALSE, cache=TRUE}
+# Need to run biips calculations with results='hide', otherwise prints status updates
+# which seemingly can't be avoided.
+biipsBootTable <- TableCompare(mvals = c(100,1000,10000,50000), nreps = 10, nimFilt = cmodBoot, otherFilt = bipLikeFunc, 
+                         otherPack = "Biips", filtType = "Bootstrap Filter", like = F)
+save(biipsBootTable, file = "biipsBootTable.Rdata")
+
+
+```
+
+
+```{r biipsout, echo=FALSE, results='asis', message=FALSE, cache=FALSE}
+load("biipsBootTable.Rdata")
+xtable(biipsBootTable)
+```

@@ -3,7 +3,7 @@
 #now let's code in SMC package
 nPeriods <- length(data$y)
 dimPerPeriod <- 1
-threshnum <- m*thresh
+#threshnum <- m*thresh
 
 #auxiliary proposals
 generateStreamRepsFunc <- function(currentPeriod, lag1Streams, 

@@ -8,7 +8,8 @@ rmeas <- Csnippet("
 ")
 
 dmeas <- Csnippet("
-  lik = dnorm(y,x,sigOE,give_log);
+
+    lik = dnorm(y,x,sigOE,give_log);
 ")
 
                    
@@ -40,5 +41,27 @@ pompLW <- function(nps){
   rownames(simPrior) <- c("b","a","sigPN", "sigOE")
   tmp <- bsmc(modelPomp, params=simPrior, nP=nps)
   return(tmp$log.evidence)
+}
+
+pompMCMC <- function(nps, nreps){
+  scale <- 0.0769827
+  chol <- matrix(c(0.0488354,   -0.00871729,     1.52e-005, -3.48894e-005,
+                   0,       0.49487, -2.15436e-005,  7.41979e-005,
+                   0,             0,     0.0157383,  -0.000240194,
+                   0,             0,             0,     0.0158859), nrow=4, ncol=4, byrow=T)
+  
+  propmat <- t(scale*chol)%*%(scale*chol)
+  prop <- function (theta) 
+  {
+    thetaTemp <- rmvnorm(1, theta, propmat)
+    
+    while((thetaTemp[1]>1)|| (thetaTemp[3]<0) || (thetaTemp[4] < 0))   thetaTemp <- rmvnorm(1, theta, propmat)
+    theta <- c("a" = thetaTemp[1], "b" = thetaTemp[2], "sigOE" = thetaTemp[3], "sigPN" = thetaTemp[4])
+    theta
+  }
+  
+  svals <- c(a = 0.95, b = 1, sigOE = 0.05, sigPN = 0.2)
+ return( pmcmc(object = modelPomp, Nmcmc = nreps, start = svals, proposal = prop, Np = nps,
+        max.fail = 10000000))
 }
 

@@ -1,0 +1,86 @@
+---
+title: "NIMBLE PMCMC Comparison to POMP and Biips packages"
+output: pdf_document
+---
+
+```{r setup, echo=FALSE, results='none', message=FALSE}
+## Note:  all computation is done in PMCMCtables.R.
+## Trying to run compution within knitr did not work well,
+## so I've run PMCMCtables.R first and used results to make knitr document.
+require(knitr)
+require(xtable)
+```
+
+We first compare runtimes for the NIMBLE PMCMC implementations to those of POMP and Biips.  Below we provide specific information about each implementation:
+
+* NIMBLE currently has two implementations of PMCMC - one version which resamples the log likelihood at each iteration (labeled Resamp), and one version which stores the log likelihood until a new sample is accepted (labeled NoResamp).  We also consider NIMBLE PMCMC algorithms using adaptation (labled Adapt) and not using adaptation (labled NoAdapt).  Each NIMBLE PMCMC algorithm uses a block sampler with a multivariate normal proposal distribution.  
+
+*  POMP's PMCMC algorithm does not allow for adaptation, and follows the NoResamp method described above. POMP allows user specification of the proposal distribution.  We set the proposals to again come from a multivariate normal distribution.
+
+* The Biips PMCMC algorithm allows adaptation.  It is not clear from the documentation whether Biips resamples log likelihood at each time point or not.  In addition, Biips does not currently have block sampling implemented, so our proposal distributions are univariate normal for each parameter.
+
+
+We again use Daniel's correlated model for analysis.  Below is a table which gives a comparison of run-times for different combinations of $n$ (the number of iterations to run the chain for) and $m$ (the number of particles to use at each iteration).  The initial values for each time the algorithm was run were set to the same values ($a = 0.95$, $b = 1.0$, $\sigma_{PN}=0.2$, $\sigma_{OE} = 0.05$).  For each combination of $m$ and $n$, we ran the PMCMC algorithm five times for each algorithm, and took the median of those five run-times.  All median times are provided in seconds.
+
+The chart below shows a few interesting facts:
+
+* Using adaptation in NIMBLE seems to add a very slight amount of time to the overall run-time of the algorithm.  We used adaptation intervals of 200, so this effect is not seen until higher iteration values.  
+
+* Using a NoResamp algrthm vs. a Resamp algorithm in NIMBLE cuts run-time roughly in half for all numbers of iterations and particle sizes.  However, as will be seen in the plots later in this document, the NoResamp algorithm seems to have issues with mixing well.  
+
+* NIMBLE runs  faster than POMP when using the NoResamp algorithm, which POMP also uses.  Using a Resamp algorithm for NIMBLE causes it to be around 50\% slower than POMP. 
+
+
+```{r tableout, echo=FALSE, results='asis', message=FALSE, cache=FALSE}
+load("timeList.Rdata")
+timelist[,4] <- round(as.numeric(timelist[,4]),3)
+xtable(timelist)
+```
+\newpage
+We next provide trace plots and posterior distributions for our parameters produced by the different PMCMC algorithms in NIMBLE and POMP.   To produce these plots, we conducted a single run of 7,500 iterations (2,500 burn-in period) with 1,000 particles per iteration.    We did not include the Biips PMCMC method, as Biips was running very slowly for such a large number of particles / iterations.
+
+Looking at the plots below, only the NIMBLE Resamp Adapt PMCMC algorithm seems to be mixing well.  As Perry guessed previously, running the PMCMC without resampling the log-likelihood at each time point seems to cause the algorithm to get stuck at certain high likelihood values.  It is also possible / likely that the choice of a better proposal covariance matrix would lead to better mixing for the non-adaptive algorithms.
+
+
+# NIMBLE PMCMC Resamp Adapt
+
+![](plots/plot1)
+\newpage
+
+# NIMBLE PMCMC Resamp NoAdapt
+
+![](plots/plot2)
+
+
+\newpage
+
+# NIMBLE PMCMC NoResamp Adapt
+
+![](plots/plot3)
+
+
+\newpage
+
+# NIMBLE PMCMC NoResamp NoAdapt
+
+![](plots/plot4)
+
+\newpage
+
+# POMP PMCMC (NoResamp NoAdapt)
+
+![](plots/plot5)
+
+\newpage
+
+We finally provide a table listing the effective MCMC sample size for each parameter, for each of the different PMCMC algorithms we ran. As seen in the plots above,  the NIMBLE Resamp Adapt algorithm gives much higher effective sample sizes than the other algorithms.
+
+```{r essTable, echo=FALSE, results='asis', message=FALSE, cache=FALSE, warning=FALSE}
+load("essTable.Rdata")
+essTable <- essTable[-c(1,7,8,9),]
+essTable$a <- round(as.numeric(essTable$a),3)
+essTable$b <- round(as.numeric(essTable$b),3)
+essTable$sigOE <- round(as.numeric(essTable$sigOE),3)
+essTable$sigPN <- round(as.numeric(essTable$sigPN),3)
+xtable(essTable)
+```
