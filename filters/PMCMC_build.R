@@ -117,6 +117,12 @@ sampler_RW_llFunctionBlock <- nimbleFunction(
 ### RW_llFunction, does a block RW, but using a particle filter likelihood function ###
 #######################################################################################
 
+### note: currently have one version of PMCMC which does not resample LL value 
+### at each iteration (sampler_RW_PFilter) and one version which resamples
+### at each iteration (sampler_RW_PfilterResamp),  The Resamp version
+### seems to mix better in limited testing.  Also, I plan to merge these two
+### samplers for easier maintenance.  
+
 sampler_RW_PFilter <- nimbleFunction(
   contains = sampler_BASE,
   setup = function(model, mvSaved, target, control) {
@@ -132,14 +138,12 @@ sampler_RW_PFilter <- nimbleFunction(
       m <- 1000
     }
     
-    
-    
-    ###  node list generation  ###
-    
     if(!all(target%in%Rmodel$getNodeNames(stochOnly=T, includeData=F,
                                      topOnly=T))){
       stop("PMCMC target can only consist of top level parameters")
     }
+    
+    ###  node list generation  ###
     
     targetAsScalar <- model$expandNodeNames(target, returnScalarComponents = TRUE)
     
@@ -158,12 +162,12 @@ sampler_RW_PFilter <- nimbleFunction(
     if(class(propCov[1,1]) != 'numeric')  stop('propCov matrix must be numeric\n')
     if(!all(dim(propCov) == d))           stop('propCov matrix must have dimension ', d, 'x', d, '\n')
     if(!isSymmetric(propCov))             stop('propCov matrix must be symmetric')
-    #if(!is.integer(m))            stop('m must be an integer')
     propCovOriginal <- propCov
     chol_propCov <- chol(propCov)
     statSums  <- matrix(0, nrow=1, ncol=d)   # sums of each node, stored as a row-matrix
     statProds <- matrix(0, nrow=d, ncol=d)   # sums of pairwise products of nodes
 
+    ###  create a mv object which stores LP from previous iteration
     storeLP <- modelValues(modelValuesSpec(vars = c('LP0'),
                                       type = c('double'),
                                       size = list(LP0 = 1)
@@ -270,14 +274,13 @@ sampler_RW_PFilterResamp <- nimbleFunction(
     if(is.na(m)){
       m <- 1000
     }
-    
-    ###  node list generation  ###
-    
+     
     if(!all(target%in%model$getNodeNames(stochOnly=T, includeData=F,
                                          topOnly=T))){
       stop("PMCMC target can only consist of top level parameters")
     }
     
+    ###  node list generation  ###
     targetAsScalar <- model$expandNodeNames(target, returnScalarComponents = TRUE)
     
     calcNodes <- model$getDependencies(target)
